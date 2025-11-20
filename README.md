@@ -1,0 +1,2 @@
+# minigame
+Repository for minigame
