@@ -1,0 +1,8 @@
+{
+  "name": "dragon-hoard-game",
+  "version": "1.0.0",
+  "description": "Dragon's Hoard - AI-powered dragon conversation game",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
