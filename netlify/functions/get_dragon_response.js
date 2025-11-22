@@ -1,6 +1,5 @@
-const fetch = require('node-fetch');
-
-exports.handler = async (event) => {
+// Netlify serverless function
+exports.handler = async (event, context) => {
   // Only allow POST requests
   if (event.httpMethod !== 'POST') {
     return {
@@ -9,69 +8,96 @@ exports.handler = async (event) => {
     };
   }
 
+  console.log('\n========== NEW REQUEST ==========');
+  
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
   if (!GEMINI_API_KEY) {
+    console.error('❌ ERROR: No API key found in environment variables');
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: 'API key not configured in Netlify environment variables' })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        error: 'API key not configured. Add GEMINI_API_KEY to Netlify environment variables' 
+      })
     };
   }
 
-  try {
-    const { prompt, temperature = 0.9, maxTokens = 200 } = JSON.parse(event.body);
+  console.log('✅ API key found');
 
-    console.log('Calling Gemini API...');
+  try {
+    const { prompt, temperature = 0.9, maxTokens } = JSON.parse(event.body);
+
+    const fetch = require('node-fetch');
     
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{ text: prompt }]
-          }],
-          generationConfig: {
-            temperature: temperature,
-            maxOutputTokens: maxTokens
-          }
-        })
-      }
-    );
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    
+    console.log('🌐 Calling Gemini API with model: gemini-2.5-flash');
+    
+    const generationConfig = { temperature };
+    if (maxTokens) {
+      generationConfig.maxOutputTokens = maxTokens;
+    }
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{ text: prompt }]
+        }],
+        generationConfig
+      })
+    });
+
+    console.log('📡 Response status:', response.status, response.statusText);
 
     const data = await response.json();
     
-    console.log('Gemini API response:', JSON.stringify(data, null, 2));
+    console.log('✅ API Response received');
 
-    // Check if response has the expected structure
-    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
-      console.error('Unexpected API response structure:', data);
+    // Check for API errors
+    if (data.error) {
+      console.error('❌ API Error:', data.error.message);
       return {
         statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          error: 'Unexpected API response structure',
-          details: data 
+          error: `Gemini API Error: ${data.error.message}`,
+          details: data.error
         })
       };
     }
 
+    // Check structure
+    if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+      console.error('❌ Unexpected response structure');
+      console.log('Response:', JSON.stringify(data, null, 2));
+      return {
+        statusCode: 500,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          error: 'Unexpected API response structure',
+          details: data
+        })
+      };
+    }
+
+    console.log('✅ SUCCESS!');
+    
     return {
       statusCode: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     };
+    
   } catch (error) {
-    console.error('Function error:', error);
+    console.error('❌ Exception:', error.message);
     return {
       statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
-        error: error.message, 
-        stack: error.stack,
-        type: error.constructor.name 
+        error: error.message
       })
     };
   }

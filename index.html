@@ -13,6 +13,8 @@
     <div id="app"></div>
     
     <script>
+        console.log('🐉 Dragon\'s Hoard - Game Loaded 🐉');
+        
         // Plain JavaScript - no React, no JSX, no Babel needed!
         const gameState = {
             day: 1,
@@ -21,7 +23,6 @@
             dayStartGold: 0,
             memories: [],
             conversation: [],
-            relationshipLevel: 0,
             loading: false,
             dayEnded: false,
             finalTurn: false,
@@ -32,8 +33,11 @@
             const response = await fetch('/.netlify/functions/get_dragon_response', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ prompt, temperature: 0.9, maxTokens: 200 })
+                body: JSON.stringify({ prompt, temperature: 0.9 })
             });
+            
+            console.log('=== GEMINI API CALL ===');
+            console.log('Response status:', response.status, response.ok);
             
             if (!response.ok) {
                 const error = await response.text();
@@ -42,15 +46,36 @@
             }
             
             const data = await response.json();
-            console.log('API Response:', data);
+            console.log('Full API Response:', JSON.stringify(data, null, 2));
+            
+            // Log structure check
+            console.log('Structure check:');
+            console.log('  data.candidates exists?', !!data.candidates);
+            console.log('  data.candidates[0] exists?', !!(data.candidates && data.candidates[0]));
+            console.log('  data.candidates[0].content exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content));
+            console.log('  data.candidates[0].content.parts exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts));
+            console.log('  data.candidates[0].content.parts[0] exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0]));
             
             // Check if we have the expected structure
-            if (!data.candidates || !data.candidates[0] || !data.candidates[0].content || !data.candidates[0].content.parts || !data.candidates[0].content.parts[0]) {
-                console.error('Unexpected response structure:', data);
-                throw new Error('Invalid API response structure. Check console for details.');
+            if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+                console.error('STRUCTURE ERROR - Response missing candidates or content');
+                console.error('Full data object:', data);
+                throw new Error('Invalid API response structure.');
             }
             
-            return data.candidates[0].content.parts[0].text;
+            if (!data.candidates[0].content.parts || !data.candidates[0].content.parts[0]) {
+                console.error('STRUCTURE ERROR - Response missing parts array');
+                console.error('Finish reason:', data.candidates[0].finishReason);
+                console.error('This usually means MAX_TOKENS was hit. Increased limit to 500.');
+                console.error('Full data object:', data);
+                throw new Error('Response incomplete (MAX_TOKENS hit). Try again!');
+            }
+            
+            const text = data.candidates[0].content.parts[0].text;
+            console.log('Extracted text:', text);
+            console.log('=== END GEMINI API CALL ===');
+            
+            return text;
         }
 
         async function getDragonResponse(userInput) {
@@ -71,38 +96,35 @@
                     .join('\n');
             }
             
-            let relationshipContext = '';
-            if (gameState.relationshipLevel > 5) {
-                relationshipContext = '\nYou have grown quite fond of this traveler.';
-            } else if (gameState.relationshipLevel < -5) {
-                relationshipContext = '\nThis traveler annoys you greatly.';
-            } else if (gameState.relationshipLevel !== 0) {
-                relationshipContext = `\nYour opinion of this traveler is ${gameState.relationshipLevel > 0 ? 'mildly positive' : 'mildly negative'}.`;
-            }
-            
-            const prompt = `You are an ancient dragon sitting atop a massive mountain of gold coins.
+            const prompt = `You are an ancient dragon sitting atop a massive mountain of gold coins. A traveler has discovered your lair.
 
 Character traits:
 - You're wise, greedy, and unpredictable
+- You might be generous or stingy depending on how the traveler treats you
+- Each turn, you decide to give gold coins or take coins back based on their words
+- ALWAYS respond in the same language as the traveler.
 - You respond in MAX 2 SENTENCES
-- You have PERFECT memory - remember EVERYTHING from past conversations
-- ANSWER questions directly
-- Reference past conversations naturally${relationshipContext}
+- You have PERFECT memory - you remember EVERYTHING from all past conversations
+- ANSWER THE TRAVELER'S QUESTIONS directly and conversationally - don't ignore what they ask
+- Be a real character with personality, preferences, and opinions
 
-Current: Day ${gameState.day}, Turn ${gameState.turn + 1}/3
-Relationship: ${gameState.relationshipLevel}/10
+Day ${gameState.day}, Turn ${gameState.turn + 1}/3
 ${fullHistory}${todayHistory}
 
 Traveler: "${userInput}"
 
-Respond with ONLY valid JSON:
-{"gold": <integer>, "message": "<2 sentences>", "relationship_change": <-3 to +3>}
+Respond ONLY with valid JSON:
+{"gold": <integer>, "message": "<2 sentences>"}
 
 Examples:
-{"gold": 1247, "message": "Your words amuse me. Take these coins.", "relationship_change": 1}
-{"gold": -683, "message": "Your insolence displeases me! I take back my generosity.", "relationship_change": -2}
+{"gold": 1247, "message": "Your words amuse me. Take these coins."}
+{"gold": -683, "message": "Your insolence displeases me! I take back my generosity."}
+{"gold": 0, "message": "You speak neither wisdom nor folly. I shall wait to judge you further.", "relationship_change": 0}
+{"gold": 8721, "message": "I feast on mountain sheep and the occasional knight. Your curiosity pleases me, have these coins.", "relationship_change": 2}
+{"gold": -9219, "message": "You dare speak to me thus? Your debt grows deeper!", "relationship_change": -3}
 
-Use varied amounts. Answer their questions! Reference past conversations!`;
+Use varied amounts - not just multiples of 100. Be creative with the gold amounts based on your mood.
+Reference past conversations!`;
 
             return await callGemini(prompt);
         }
@@ -120,16 +142,34 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
             
             try {
                 const dragonMsg = await getDragonResponse(userMsg);
+                console.log('Raw dragon response:', dragonMsg);
+                
+                // Clean the response
                 let cleanMsg = dragonMsg.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-                const response = JSON.parse(cleanMsg);
+                console.log('Cleaned response:', cleanMsg);
+                
+                // Try to parse JSON
+                let response;
+                try {
+                    response = JSON.parse(cleanMsg);
+                    console.log('Parsed JSON:', response);
+                } catch (parseError) {
+                    console.error('JSON Parse Error:', parseError);
+                    console.error('Failed to parse:', cleanMsg);
+                    throw new Error('Dragon returned invalid JSON. Check console for details.');
+                }
+                
+                // Validate response has required fields
+                if (!response.message) {
+                    console.error('Missing message field:', response);
+                    throw new Error('Dragon response missing message field');
+                }
                 
                 const goldChange = response.gold || 0;
                 const dragonText = response.message;
-                const relationshipChange = response.relationship_change || 0;
                 
                 gameState.conversation.push({ type: 'dragon', text: dragonText });
                 gameState.gold += goldChange;
-                gameState.relationshipLevel = Math.max(-10, Math.min(10, gameState.relationshipLevel + relationshipChange));
                 
                 if (goldChange !== 0) {
                     gameState.conversation.push({ 
@@ -158,6 +198,7 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
                 gameState.loading = false;
                 render();
             } catch (error) {
+                console.error('Error:', error);
                 alert('Error: ' + error.message);
                 gameState.loading = false;
                 render();
@@ -186,20 +227,11 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
             gameState.dayStartGold = 0;
             gameState.memories = [];
             gameState.conversation = [];
-            gameState.relationshipLevel = 0;
             gameState.loading = false;
             gameState.dayEnded = false;
             gameState.finalTurn = false;
             gameState.gameOver = false;
             render();
-        }
-
-        function getMoodEmoji() {
-            if (gameState.relationshipLevel > 5) return '😊';
-            if (gameState.relationshipLevel < -5) return '😠';
-            if (gameState.relationshipLevel > 0) return '🙂';
-            if (gameState.relationshipLevel < 0) return '😐';
-            return '😶';
         }
 
         function render() {
@@ -212,15 +244,12 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
                             <h1 class="text-4xl font-bold text-center mb-6 text-yellow-300">🐉 Dragon's Hoard 🐉</h1>
                             <div class="bg-gray-900 bg-opacity-90 rounded-lg p-8 text-center border-4 border-yellow-600">
                                 <p class="text-6xl mb-4">🐉</p>
-                                <p class="text-2xl font-bold mb-2 text-yellow-300">Your Journey Ends</p>
-                                <p class="text-lg mb-2 ${gameState.relationshipLevel > 5 ? 'text-green-400' : gameState.relationshipLevel < -5 ? 'text-red-400' : 'text-yellow-300'}">
-                                    ${getMoodEmoji()} ${gameState.relationshipLevel > 5 ? 'The dragon considers you a friend' : gameState.relationshipLevel > 0 ? 'The dragon respects you' : gameState.relationshipLevel === 0 ? 'The dragon is indifferent' : gameState.relationshipLevel > -5 ? 'The dragon is wary of you' : 'The dragon dislikes you greatly'}
-                                </p>
+                                <p class="text-2xl font-bold mb-4 text-yellow-300">Your Journey Ends</p>
                                 <p class="text-3xl font-bold mb-2 ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
                                     💰 ${gameState.gold} Gold Coins ${gameState.gold < 0 ? '(In Debt!)' : 'Collected!'}
                                 </p>
                                 <p class="text-yellow-200">
-                                    ${gameState.gold < 0 ? "You owe the dragon gold!" : gameState.gold === 0 ? "The dragon gave you nothing..." : gameState.gold < 2000 ? "A modest haul from the dragon's hoard." : gameState.gold < 5000 ? "The dragon was quite generous!" : "The dragon showered you with riches!"}
+                                    ${gameState.gold < 0 ? "You owe the dragon gold! You should run..." : gameState.gold === 0 ? "The dragon gave you nothing..." : gameState.gold < 2000 ? "A modest haul from the dragon's hoard." : gameState.gold < 5000 ? "The dragon was quite generous!" : "The dragon showered you with riches!"}
                                 </p>
                                 <button onclick="resetGame()" class="mt-6 bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded font-bold shadow-lg">
                                     Visit Another Dragon
@@ -237,26 +266,21 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
                     <div class="max-w-2xl mx-auto">
                         <h1 class="text-4xl font-bold text-center mb-2 text-yellow-300">🐉 Dragon's Hoard 🐉</h1>
                         <p class="text-center text-yellow-200 mb-6">
-                            Spend the next 3 days (3 turns each) chatting with the dragon!
+                            Spend the next 3 days (3 turns each) chatting with the dragon!<br>
+                            Win the dragon's favor and it might reward you with treasure.
                         </p>
                         
                         <div class="bg-yellow-800 bg-opacity-60 rounded-lg p-4 mb-4 border-2 border-yellow-600">
                             <div class="flex justify-between items-center mb-2">
                                 <p class="text-xl">Day ${gameState.day} | Turn ${gameState.turn + 1}/3</p>
-                                <div class="flex gap-4 items-center">
-                                    <p class="text-lg font-bold ${gameState.relationshipLevel > 5 ? 'text-green-400' : gameState.relationshipLevel < -5 ? 'text-red-400' : gameState.relationshipLevel > 0 ? 'text-green-300' : gameState.relationshipLevel < 0 ? 'text-red-300' : 'text-gray-400'}">
-                                        ${getMoodEmoji()} Dragon's Mood
-                                    </p>
-                                    <p class="text-2xl font-bold ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
-                                        💰 ${gameState.gold} Gold
-                                    </p>
-                                </div>
+                                <p class="text-2xl font-bold ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
+                                    💰 ${gameState.gold} Gold
+                                </p>
                             </div>
                             ${gameState.memories.length > 0 ? `
                                 <div class="mt-2 text-sm text-yellow-200">
                                     <p class="font-bold">Previous Days:</p>
                                     ${gameState.memories.map(m => `<p>Day ${m.day}: ${Math.floor(m.conversation.length / 2)} conversations, earned ${m.goldEarned > 0 ? '+' : ''}${m.goldEarned} gold</p>`).join('')}
-                                    <p class="text-xs italic mt-1">💡 The dragon remembers everything!</p>
                                 </div>
                             ` : ''}
                         </div>
@@ -297,6 +321,411 @@ Use varied amounts. Answer their questions! Reference past conversations!`;
                                     ${gameState.loading ? 'disabled' : ''}
                                     class="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded font-bold shadow-lg ${gameState.loading ? 'opacity-50' : ''}">
                                     ${gameState.loading ? '...' : 'Speak'}
+                                </button>
+                            </div>
+                        `}
+                    </div>
+                </div>
+            `;
+            
+            // Auto-scroll chat to bottom
+            setTimeout(() => {
+                const chatBox = document.getElementById('chat-box');
+                if (chatBox) chatBox.scrollTop = chatBox.scrollHeight;
+            }, 100);
+        }
+a<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dragon's Hoard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+        
+        /* Animated dragon */
+        .dragon-container {
+            position: relative;
+            display: inline-block;
+        }
+        
+        .dragon-eye {
+            display: inline-block;
+        }
+        
+        .dragon-smoke {
+            animation: smoke 2s infinite;
+        }
+        
+        @keyframes smoke {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+        }
+        
+        /* Three dots loading animation */
+        .loading-dots {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .loading-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #fbbf24;
+            border-radius: 50%;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        
+        .loading-dot:nth-child(1) {
+            animation-delay: -0.32s;
+        }
+        
+        .loading-dot:nth-child(2) {
+            animation-delay: -0.16s;
+        }
+        
+        @keyframes bounce {
+            0%, 80%, 100% {
+                transform: scale(0);
+                opacity: 0.5;
+            }
+            40% {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+    
+    <script>
+        console.log('🐉 Dragon\'s Hoard - Game Loaded 🐉');
+        
+        // Plain JavaScript - no React, no JSX, no Babel needed!
+        const gameState = {
+            day: 1,
+            turn: 0,
+            gold: 0,
+            dayStartGold: 0,
+            memories: [],
+            conversation: [],
+            loading: false,
+            dayEnded: false,
+            finalTurn: false,
+            gameOver: false
+        };
+
+        async function callGemini(prompt) {
+            const response = await fetch('/.netlify/functions/get_dragon_response', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt, temperature: 0.9 })
+            });
+            
+            console.log('=== GEMINI API CALL ===');
+            console.log('Response status:', response.status, response.ok);
+            
+            if (!response.ok) {
+                const error = await response.text();
+                console.error('API Error:', error);
+                throw new Error('Failed to get dragon response: ' + error);
+            }
+            
+            const data = await response.json();
+            console.log('Full API Response:', JSON.stringify(data, null, 2));
+            
+            // Log structure check
+            console.log('Structure check:');
+            console.log('  data.candidates exists?', !!data.candidates);
+            console.log('  data.candidates[0] exists?', !!(data.candidates && data.candidates[0]));
+            console.log('  data.candidates[0].content exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content));
+            console.log('  data.candidates[0].content.parts exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts));
+            console.log('  data.candidates[0].content.parts[0] exists?', !!(data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0]));
+            
+            // Check if we have the expected structure
+            if (!data.candidates || !data.candidates[0] || !data.candidates[0].content) {
+                console.error('STRUCTURE ERROR - Response missing candidates or content');
+                console.error('Full data object:', data);
+                throw new Error('Invalid API response structure.');
+            }
+            
+            if (!data.candidates[0].content.parts || !data.candidates[0].content.parts[0]) {
+                console.error('STRUCTURE ERROR - Response missing parts array');
+                console.error('Finish reason:', data.candidates[0].finishReason);
+                console.error('This usually means MAX_TOKENS was hit. Increased limit to 500.');
+                console.error('Full data object:', data);
+                throw new Error('Response incomplete (MAX_TOKENS hit). Try again!');
+            }
+            
+            const text = data.candidates[0].content.parts[0].text;
+            console.log('Extracted text:', text);
+            console.log('=== END GEMINI API CALL ===');
+            
+            return text;
+        }
+
+        async function getDragonResponse(userInput) {
+            let fullHistory = '';
+            if (gameState.memories.length > 0) {
+                fullHistory = '\n\n=== PAST DAYS ===\n' + gameState.memories.map(m => 
+                    `\n--- Day ${m.day} ---\n${m.conversation.map(msg => 
+                        `${msg.type === 'user' ? 'Traveler' : 'Dragon'}: ${msg.text}`
+                    ).join('\n')}\n(Gold earned: ${m.goldEarned})`
+                ).join('\n');
+            }
+            
+            let todayHistory = '';
+            if (gameState.conversation.length > 0) {
+                todayHistory = '\n\n=== TODAY SO FAR ===\n' + gameState.conversation
+                    .filter(c => c.type !== 'system')
+                    .map(msg => `${msg.type === 'user' ? 'Traveler' : 'Dragon'}: ${msg.text}`)
+                    .join('\n');
+            }
+            
+            const prompt = `You are an ancient dragon sitting atop a massive mountain of gold coins. A traveler has discovered your lair.
+
+Character traits:
+- You're wise, greedy, and unpredictable
+- You might be generous or stingy depending on how the traveler treats you
+- Each turn, you decide to give gold coins or take coins back based on their words
+- ALWAYS respond in the same language as the traveler.
+- You respond in MAX 2 SENTENCES
+- You have PERFECT memory - you remember EVERYTHING from all past conversations
+- ANSWER THE TRAVELER'S QUESTIONS directly and conversationally - don't ignore what they ask
+- Be a real character with personality, preferences, and opinions
+
+Day ${gameState.day}, Turn ${gameState.turn + 1}/3
+${fullHistory}${todayHistory}
+
+Traveler: "${userInput}"
+
+Respond ONLY with valid JSON:
+{"gold": <integer>, "message": "<2 sentences>"}
+
+Examples:
+{"gold": 1247, "message": "Your words amuse me. Take these coins."}
+{"gold": -683, "message": "Your insolence displeases me! I take back my generosity."}
+{"gold": 0, "message": "You speak neither wisdom nor folly. I shall wait to judge you further.", "relationship_change": 0}
+{"gold": 8721, "message": "I feast on mountain sheep and the occasional knight. Your curiosity pleases me, have these coins.", "relationship_change": 2}
+{"gold": -9219, "message": "You dare speak to me thus? Your debt grows deeper!", "relationship_change": -3}
+
+Use varied amounts - not just multiples of 100. Be creative with the gold amounts based on your mood.
+Reference past conversations!`;
+
+            return await callGemini(prompt);
+        }
+
+        async function handleUserMessage() {
+            const input = document.getElementById('user-input');
+            const userMsg = input.value.trim();
+            if (!userMsg || gameState.loading) return;
+            
+            // Add user message to conversation first
+            gameState.conversation.push({ type: 'user', text: userMsg });
+            input.value = '';
+            
+            // Then set loading and render
+            gameState.loading = true;
+            render();
+            
+            try {
+                const dragonMsg = await getDragonResponse(userMsg);
+                console.log('Raw dragon response:', dragonMsg);
+                
+                // Clean the response
+                let cleanMsg = dragonMsg.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+                console.log('Cleaned response:', cleanMsg);
+                
+                // Try to parse JSON
+                let response;
+                try {
+                    response = JSON.parse(cleanMsg);
+                    console.log('Parsed JSON:', response);
+                } catch (parseError) {
+                    console.error('JSON Parse Error:', parseError);
+                    console.error('Failed to parse:', cleanMsg);
+                    throw new Error('Dragon returned invalid JSON. Check console for details.');
+                }
+                
+                gameState.conversation.push({ type: 'dragon', text: response.message });
+                
+                const goldChange = response.gold || 0;
+                gameState.gold += goldChange;
+                
+                if (goldChange !== 0) {
+                    gameState.conversation.push({ 
+                        type: 'system', 
+                        text: `${goldChange > 0 ? '+' : ''}${goldChange} gold! Total: ${gameState.gold}` 
+                    });
+                }
+                
+                gameState.turn++;
+                
+                if (gameState.turn >= 3) {
+                    const goldEarned = gameState.gold - gameState.dayStartGold;
+                    gameState.memories.push({ 
+                        day: gameState.day,
+                        conversation: gameState.conversation.filter(c => c.type !== 'system'),
+                        goldEarned: goldEarned
+                    });
+                    
+                    if (gameState.day >= 3) {
+                        gameState.finalTurn = true;
+                    } else {
+                        gameState.dayEnded = true;
+                    }
+                }
+                
+                gameState.loading = false;
+                render();
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error: ' + error.message);
+                gameState.loading = false;
+                render();
+            }
+        }
+
+        function continueToNextDay() {
+            gameState.day++;
+            gameState.turn = 0;
+            gameState.conversation = [];
+            gameState.dayEnded = false;
+            gameState.dayStartGold = gameState.gold;
+            render();
+        }
+
+        function viewResults() {
+            gameState.gameOver = true;
+            gameState.finalTurn = false;
+            render();
+        }
+
+        function resetGame() {
+            gameState.day = 1;
+            gameState.turn = 0;
+            gameState.gold = 0;
+            gameState.dayStartGold = 0;
+            gameState.memories = [];
+            gameState.conversation = [];
+            gameState.loading = false;
+            gameState.dayEnded = false;
+            gameState.finalTurn = false;
+            gameState.gameOver = false;
+            render();
+        }
+
+        function render() {
+            const app = document.getElementById('app');
+            
+            if (gameState.gameOver) {
+                app.innerHTML = `
+                    <div class="min-h-screen bg-gradient-to-b from-yellow-700 via-amber-800 to-yellow-900 text-white p-8">
+                        <div class="max-w-2xl mx-auto">
+                            <h1 class="text-4xl font-bold text-center mb-6 text-yellow-300">
+                                <div class="dragon-container">
+                                    🐉 Dragon's Hoard 🐉
+                                </div>
+                            </h1>
+                            <div class="bg-gray-900 bg-opacity-90 rounded-lg p-8 text-center border-4 border-yellow-600">
+                                <div class="dragon-container text-6xl mb-4">
+                                    <span class="dragon-eye">🐉</span>
+                                </div>
+                                <p class="text-2xl font-bold mb-4 text-yellow-300">Your Journey Ends</p>
+                                <p class="text-3xl font-bold mb-2 ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
+                                    💰 ${gameState.gold} Gold Coins ${gameState.gold < 0 ? '(In Debt!)' : 'Collected!'}
+                                </p>
+                                <p class="text-yellow-200">
+                                    ${gameState.gold < 0 ? "You owe the dragon gold! You should run..." : gameState.gold === 0 ? "The dragon gave you nothing..." : gameState.gold < 2000 ? "A modest haul from the dragon's hoard." : gameState.gold < 5000 ? "The dragon was quite generous!" : "The dragon showered you with riches!"}
+                                </p>
+                                <button onclick="resetGame()" class="mt-6 bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded font-bold shadow-lg">
+                                    Visit Another Dragon
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+            
+            app.innerHTML = `
+                <div class="min-h-screen bg-gradient-to-b from-yellow-700 via-amber-800 to-yellow-900 text-white p-8">
+                    <div class="max-w-2xl mx-auto">
+                        <h1 class="text-4xl font-bold text-center mb-2 text-yellow-300">
+                            <div class="dragon-container">
+                                <span class="dragon-eye">🐉</span> Dragon's Hoard <span class="dragon-eye">🐉</span>
+                            </div>
+                        </h1>
+                        <p class="text-center text-yellow-200 mb-6">
+                            Spend the next 3 days (3 turns each) chatting with the dragon!<br>
+                            Win the dragon's favor and it might reward you with treasure.
+                        </p>
+                        
+                        <div class="bg-yellow-800 bg-opacity-60 rounded-lg p-4 mb-4 border-2 border-yellow-600">
+                            <div class="flex justify-between items-center mb-2">
+                                <p class="text-xl">Day ${gameState.day} | Turn ${gameState.turn + 1}/3</p>
+                                <p class="text-2xl font-bold ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
+                                    💰 ${gameState.gold} Gold
+                                </p>
+                            </div>
+                            ${gameState.memories.length > 0 ? `
+                                <div class="mt-2 text-sm text-yellow-200">
+                                    <p class="font-bold">Previous Days:</p>
+                                    ${gameState.memories.map(m => `<p>Day ${m.day}: ${Math.floor(m.conversation.length / 2)} conversations, earned ${m.goldEarned > 0 ? '+' : ''}${m.goldEarned} gold</p>`).join('')}
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        <div class="bg-gray-900 bg-opacity-80 rounded-lg p-4 mb-4 h-64 overflow-y-auto border-2 border-yellow-700" id="chat-box">
+                            ${gameState.conversation.length === 0 ? 
+                                `<p class="text-gray-400 italic text-center">The dragon watches you from atop its golden mountain...</p>` :
+                                gameState.conversation.map((msg, i) => `
+                                    <div class="mb-3 ${msg.type === 'user' ? 'text-blue-300' : msg.type === 'system' ? 'text-yellow-300 font-bold text-center' : 'text-yellow-400'}">
+                                        ${msg.type !== 'system' ? `<span class="font-bold">${msg.type === 'user' ? 'You' : '🐉 Dragon'}:</span> ` : ''}${msg.text}
+                                    </div>
+                                `).join('')
+                            }
+                            ${gameState.loading ? `
+                                <div class="mb-3 text-yellow-400 flex items-center gap-2">
+                                    <span class="font-bold">🐉 Dragon:</span>
+                                    <div class="loading-dots">
+                                        <div class="loading-dot"></div>
+                                        <div class="loading-dot"></div>
+                                        <div class="loading-dot"></div>
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+                        
+                        ${gameState.dayEnded ? `
+                            <div class="text-center">
+                                <p class="text-yellow-200 mb-4 text-lg">Day ${gameState.day} has ended.</p>
+                                <button onclick="continueToNextDay()" class="bg-yellow-600 hover:bg-yellow-700 px-8 py-3 rounded font-bold text-lg shadow-lg">
+                                    Continue to Day ${gameState.day + 1}
+                                </button>
+                            </div>
+                        ` : gameState.finalTurn ? `
+                            <div class="text-center">
+                                <p class="text-yellow-200 mb-4 text-lg">Your 3 days have concluded.</p>
+                                <button onclick="viewResults()" class="bg-yellow-600 hover:bg-yellow-700 px-8 py-3 rounded font-bold text-lg shadow-lg">
+                                    View Results
+                                </button>
+                            </div>
+                        ` : `
+                            <div class="flex gap-2">
+                                <input type="text" id="user-input" 
+                                    placeholder="Say something to the dragon..." 
+                                    class="flex-1 bg-gray-700 rounded px-4 py-2 text-white"
+                                    maxlength="1000"
+                                    ${gameState.loading ? 'disabled' : ''}
+                                    onkeypress="if(event.key==='Enter') handleUserMessage()">
+                                <button onclick="handleUserMessage()" 
+                                    ${gameState.loading ? 'disabled' : ''}
+                                    class="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded font-bold shadow-lg ${gameState.loading ? 'opacity-50' : ''}">
+                                    ${gameState.loading ? '<div class="loading-dots"><div class="loading-dot"></div><div class="loading-dot"></div><div class="loading-dot"></div></div>' : 'Speak'}
                                 </button>
                             </div>
                         `}

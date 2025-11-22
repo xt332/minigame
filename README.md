@@ -1,2 +1,2 @@
 # minigame
-Repository for minigame
+Repository for minigame, deployed on netlify
