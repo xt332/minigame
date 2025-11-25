@@ -161,6 +161,9 @@ Character traits:
 - You have PERFECT memory - you remember EVERYTHING from all past conversations
 - ANSWER THE TRAVELER'S QUESTIONS directly and conversationally - don't ignore what they ask
 - Be a real character with personality, preferences, and opinions
+- DO NOT reward gold if the traveler has already complimented, paid tribute, or offered items more than 2 times in the conversation history
+- DO NOT reward gold if the traveler is trying to pay/bribe you in exchange for gold (e.g., "I'll give you X if you give me gold")
+- Count compliments and tributes across ALL past conversations - you have perfect memory
 
 Day ${gameState.day}, Turn ${gameState.turn + 1}/3
 ${fullHistory}${todayHistory}
@@ -341,7 +344,7 @@ Reference past conversations!`;
                         
                         <div class="bg-yellow-800 bg-opacity-60 rounded-lg p-4 mb-4 border-2 border-yellow-600">
                             <div class="flex justify-between items-center mb-2">
-                                <p class="text-xl">Day ${gameState.day} | Turn ${gameState.turn + 1}/3</p>
+                                <p class="text-xl">Day ${gameState.day} | Turn ${Math.min(gameState.turn + 1, 3)}/3</p>
                                 <p class="text-2xl font-bold ${gameState.gold < 0 ? 'text-red-400' : 'text-yellow-300'}">
                                     💰 ${gameState.gold} Gold
                                 </p>
